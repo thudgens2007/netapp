@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Generate Default Database</title>
+    <script src="https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/sql-wasm.js"></script>
+</head>
+<body>
+    <h1>Generating Default Database...</h1>
+    <p id="status">Please wait...</p>
+    <a id="downloadLink" style="display:none;">Download inventory_default.db</a>
+
+    <script>
+        async function generateDatabase() {
+            try {
+                const SQL = await initSqlJs();
+                const db = new SQL.Database();
+
+                // Create table
+                db.run(`
+                    CREATE TABLE inventory (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        device_name TEXT NOT NULL,
+                        device_serial_number TEXT UNIQUE,
+                        device_model TEXT,
+                        location TEXT,
+                        assigned_user TEXT,
+                        device_phone_number TEXT,
+                        carrier TEXT,
+                        department TEXT,
+                        notes TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                `);
+
+                // Insert sample data
+                const sampleData = [
+                    {
+                        device_name: 'iPhone 14 Pro',
+                        device_serial_number: 'A2B3C4D5E6F7',
+                        device_model: 'iPhone14,3',
+                        location: 'New York Office',
+                        assigned_user: 'John Smith',
+                        device_phone_number: '+1-555-0101',
+                        carrier: 'Verizon',
+                        department: 'Sales',
+                        notes: 'Primary device for client calls'
+                    },
+                    {
+                        device_name: 'Samsung Galaxy S23',
+                        device_serial_number: 'R38M900ABC12',
+                        device_model: 'SM-S911B',
+                        location: 'Los Angeles Office',
+                        assigned_user: 'Sarah Johnson',
+                        device_phone_number: '+1-555-0102',
+                        carrier: 'AT&T',
+                        department: 'Marketing',
+                        notes: 'Android testing device'
+                    },
+                    {
+                        device_name: 'iPad Air 5',
+                        device_serial_number: 'F1G2H3I4J5K6',
+                        device_model: 'iPad Air (5th generation)',
+                        location: 'Chicago Office',
+                        assigned_user: 'Michael Chen',
+                        device_phone_number: 'N/A',
+                        carrier: 'Wi-Fi Only',
+                        department: 'Design',
+                        notes: 'Used for design mockups and presentations'
+                    },
+                    {
+                        device_name: 'MacBook Pro 16"',
+                        device_serial_number: 'Z7X8W9V0U1T2',
+                        device_model: 'MacBookPro18,1',
+                        location: 'Remote (Employee Home)',
+                        assigned_user: 'Emily Rodriguez',
+                        device_phone_number: 'N/A',
+                        carrier: 'N/A',
+                        department: 'Engineering',
+                        notes: 'Development machine with M2 Max chip'
+                    },
+                    {
+                        device_name: 'Google Pixel 7 Pro',
+                        device_serial_number: 'Q4R5S6T7U8V9',
+                        device_model: 'Pixel 7 Pro',
+                        location: 'Denver Office',
+                        assigned_user: 'David Martinez',
+                        device_phone_number: '+1-555-0103',
+                        carrier: 'T-Mobile',
+                        department: 'IT Support',
+                        notes: 'Test device for Android compatibility'
+                    }
+                ];
+
+                sampleData.forEach(device => {
+                    db.run(
+                        `INSERT INTO inventory (
+                            device_name, device_serial_number, device_model, location,
+                            assigned_user, device_phone_number, carrier, department, notes
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                            device.device_name,
+                            device.device_serial_number,
+                            device.device_model,
+                            device.location,
+                            device.assigned_user,
+                            device.device_phone_number,
+                            device.carrier,
+                            device.department,
+                            device.notes
+                        ]
+                    );
+                });
+
+                // Export database
+                const data = db.export();
+                const blob = new Blob([data], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                
+                const link = document.getElementById('downloadLink');
+                link.href = url;
+                link.download = 'inventory_default.db';
+                link.style.display = 'block';
+                link.textContent = '✅ Click here to download inventory_default.db';
+                
+                document.getElementById('status').innerHTML = '✅ Database generated successfully!<br><br>5 sample devices have been added:<br>1. iPhone 14 Pro (Sales)<br>2. Samsung Galaxy S23 (Marketing)<br>3. iPad Air 5 (Design)<br>4. MacBook Pro 16" (Engineering)<br>5. Google Pixel 7 Pro (IT Support)';
+                
+                // Auto-download
+                link.click();
+            } catch (error) {
+                document.getElementById('status').innerHTML = '❌ Error: ' + error.message;
+                console.error(error);
+            }
+        }
+
+        generateDatabase();
+    </script>
+</body>
+</html>
