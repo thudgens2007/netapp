@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Device Inventory Management Portal</title>
+    <script src="https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/sql-wasm.js"></script>
     <style>
         * {
             margin: 0;
@@ -243,11 +244,34 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+
+        .db-info {
+            font-size: 12px;
+            color: #fff;
+            margin-top: 8px;
+            opacity: 0.9;
+        }
+
+        .sync-buttons {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #eee;
+        }
+
+        .btn-download {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .btn-download:hover {
+            background: #138496;
+        }
     </style>
 </head>
 <body>
     <header>
         <h1>📱 Device Inventory Management Portal</h1>
+        <div class="db-info">💾 Local SQLite Database • Auto-saving • No server required</div>
     </header>
 
     <div class="container">
@@ -315,21 +339,106 @@
                 </table>
             </div>
             <div class="record-count" id="tableRecordCount"></div>
+
+            <!-- Database Management -->
+            <div class="sync-buttons">
+                <h3 style="color: #0f4c81; margin-bottom: 12px;">💾 Database Management</h3>
+                <button class="btn-download" onclick="exportDatabase()">⬇️ Download Database</button>
+                <button class="btn-secondary" onclick="exportCSV()">📥 Export as CSV</button>
+                <button class="btn-primary" onclick="document.getElementById('importDbFile').click()">⬆️ Import Database</button>
+                <input type="file" id="importDbFile" accept=".db" style="display: none;" onchange="importDatabase()">
+                <div id="dbStatus" style="margin-top: 12px;"></div>
+            </div>
         </div>
     </div>
 
     <script>
+        let db = null;
+        let SQL = null;
         let inventory = [];
         let filteredInventory = [];
 
-        // Load data on page load
-        window.addEventListener('DOMContentLoaded', loadData);
-
-        async function loadData() {
+        // Initialize SQL.js
+        async function initDB() {
             try {
-                const response = await fetch('api.php');
-                if (!response.ok) throw new Error('Network response was not ok');
-                inventory = await response.json();
+                SQL = await initSqlJs();
+                
+                // Try to load existing database from localStorage
+                const savedDb = localStorage.getItem('inventoryDB');
+                
+                if (savedDb) {
+                    // Load existing database
+                    const filebuffer = new Uint8Array(savedDb.split(',').map(x => parseInt(x)));
+                    db = new SQL.Database(filebuffer);
+                } else {
+                    // Create new database
+                    db = new SQL.Database();
+                    createTable();
+                    saveDatabase();
+                }
+                
+                loadData();
+                console.log('Database initialized successfully');
+            } catch (error) {
+                console.error('Error initializing database:', error);
+                showStatus('Error initializing database: ' + error.message, 'error');
+            }
+        }
+
+        function createTable() {
+            if (!db) return;
+            
+            db.run(`
+                CREATE TABLE IF NOT EXISTS inventory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_name TEXT NOT NULL,
+                    device_serial_number TEXT UNIQUE,
+                    device_model TEXT,
+                    location TEXT,
+                    assigned_user TEXT,
+                    device_phone_number TEXT,
+                    carrier TEXT,
+                    department TEXT,
+                    notes TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+        }
+
+        function saveDatabase() {
+            if (!db) return;
+            try {
+                const data = db.export();
+                const arr = Array.from(data);
+                localStorage.setItem('inventoryDB', arr.toString());
+                console.log('Database saved to localStorage');
+            } catch (error) {
+                console.error('Error saving database:', error);
+            }
+        }
+
+        function loadData() {
+            if (!db) return;
+            
+            try {
+                const result = db.exec('SELECT * FROM inventory ORDER BY updated_at DESC');
+                
+                if (result.length > 0) {
+                    const columns = result[0].columns;
+                    const values = result[0].values;
+                    
+                    inventory = values.map(row => {
+                        const record = {};
+                        columns.forEach((col, i) => {
+                            record[col] = row[i];
+                        });
+                        return record;
+                    });
+                } else {
+                    inventory = [];
+                }
+                
                 filteredInventory = [...inventory];
                 render(filteredInventory);
                 updateRecordCount();
@@ -415,7 +524,12 @@
             filterTable();
         }
 
-        async function saveRecord() {
+        function saveRecord() {
+            if (!db) {
+                showStatus('Database not initialized', 'error');
+                return;
+            }
+
             const deviceName = document.getElementById('device_name').value.trim();
             
             if (!deviceName) {
@@ -423,8 +537,8 @@
                 return;
             }
 
+            const id = document.getElementById('recordId').value;
             const record = {
-                id: document.getElementById('recordId').value || '',
                 device_name: deviceName,
                 device_serial_number: document.getElementById('device_serial_number').value.trim(),
                 device_model: document.getElementById('device_model').value.trim(),
@@ -437,110 +551,199 @@
             };
 
             try {
-                const response = await fetch('api.php', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(record)
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    showStatus(record.id ? 'Record updated successfully ✓' : 'Record created successfully ✓', 'success');
-                    await loadData();
-                    clearForm();
+                if (id) {
+                    // Update
+                    db.run(
+                        `UPDATE inventory SET 
+                            device_name = ?, 
+                            device_serial_number = ?, 
+                            device_model = ?, 
+                            location = ?, 
+                            assigned_user = ?, 
+                            device_phone_number = ?, 
+                            carrier = ?, 
+                            department = ?, 
+                            notes = ?,
+                            updated_at = CURRENT_TIMESTAMP 
+                        WHERE id = ?`,
+                        [record.device_name, record.device_serial_number, record.device_model, 
+                         record.location, record.assigned_user, record.device_phone_number, 
+                         record.carrier, record.department, record.notes, id]
+                    );
+                    showStatus('Record updated successfully ✓', 'success');
                 } else {
-                    showStatus(result.message || 'Save failed', 'error');
+                    // Insert
+                    db.run(
+                        `INSERT INTO inventory (device_name, device_serial_number, device_model, location, assigned_user, device_phone_number, carrier, department, notes) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [record.device_name, record.device_serial_number, record.device_model, 
+                         record.location, record.assigned_user, record.device_phone_number, 
+                         record.carrier, record.department, record.notes]
+                    );
+                    showStatus('Record created successfully ✓', 'success');
                 }
+                
+                saveDatabase();
+                loadData();
+                clearForm();
             } catch (error) {
                 console.error('Error:', error);
-                showStatus('Error saving record: ' + error.message, 'error');
+                if (error.message.includes('UNIQUE constraint failed')) {
+                    showStatus('Serial number already exists', 'error');
+                } else {
+                    showStatus('Error saving record: ' + error.message, 'error');
+                }
             }
         }
 
-        async function deleteRecord(id) {
+        function deleteRecord(id) {
             if (!confirm('Are you sure you want to delete this record?')) return;
 
             try {
-                const response = await fetch('api.php', {
-                    method: 'DELETE',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ id })
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    showStatus('Record deleted successfully ✓', 'success');
-                    await loadData();
-                } else {
-                    showStatus(result.message || 'Delete failed', 'error');
-                }
+                db.run('DELETE FROM inventory WHERE id = ?', [id]);
+                saveDatabase();
+                showStatus('Record deleted successfully ✓', 'success');
+                loadData();
             } catch (error) {
                 console.error('Error:', error);
                 showStatus('Error deleting record', 'error');
             }
         }
 
-        async function importCSV() {
+        function importCSV() {
             const file = document.getElementById('csvFile').files[0];
             if (!file) {
                 showStatus('Please select a CSV file', 'error');
                 return;
             }
 
-            try {
-                const text = await file.text();
-                const lines = text.trim().split(/\r?\n/);
-                
-                if (lines.length < 2) {
-                    showStatus('CSV file must contain at least a header row', 'error');
-                    return;
-                }
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const text = e.target.result;
+                    const lines = text.trim().split(/\r?\n/);
+                    
+                    if (lines.length < 2) {
+                        showStatus('CSV file must contain at least a header row', 'error');
+                        return;
+                    }
 
-                const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-                const requiredHeaders = ['device_name', 'device_serial_number', 'device_model', 'location', 'assigned_user', 'device_phone_number', 'carrier', 'department', 'notes'];
-                
-                const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
-                if (missingHeaders.length > 0) {
-                    showStatus('Missing required headers: ' + missingHeaders.join(', '), 'error');
-                    return;
-                }
+                    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+                    const requiredHeaders = ['device_name', 'device_serial_number', 'device_model', 'location', 'assigned_user', 'device_phone_number', 'carrier', 'department', 'notes'];
+                    
+                    const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
+                    if (missingHeaders.length > 0) {
+                        showStatus('Missing required headers: ' + missingHeaders.join(', '), 'error');
+                        return;
+                    }
 
-                const records = [];
-                for (let i = 1; i < lines.length; i++) {
-                    const values = lines[i].split(',').map(v => v.trim());
-                    const record = {};
-                    headers.forEach((header, index) => {
-                        record[header] = values[index] || '';
-                    });
-                    records.push(record);
-                }
+                    let imported = 0;
+                    for (let i = 1; i < lines.length; i++) {
+                        if (!lines[i].trim()) continue;
+                        
+                        const values = lines[i].split(',').map(v => v.trim());
+                        const record = {};
+                        headers.forEach((header, index) => {
+                            record[header] = values[index] || '';
+                        });
 
-                const response = await fetch('api.php', {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ records })
-                });
+                        try {
+                            db.run(
+                                `INSERT OR IGNORE INTO inventory (device_name, device_serial_number, device_model, location, assigned_user, device_phone_number, carrier, department, notes) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                                [record.device_name, record.device_serial_number, record.device_model, 
+                                 record.location, record.assigned_user, record.device_phone_number, 
+                                 record.carrier, record.department, record.notes]
+                            );
+                            imported++;
+                        } catch (error) {
+                            console.warn('Skipped row ' + i + ': ' + error.message);
+                        }
+                    }
 
-                const result = await response.json();
-
-                if (result.success) {
-                    showStatus(`Imported ${result.imported} records successfully ✓`, 'success');
+                    saveDatabase();
+                    showStatus(`Imported ${imported} records successfully ✓`, 'success');
                     document.getElementById('csvFile').value = '';
-                    await loadData();
-                } else {
-                    showStatus(result.message || 'Import failed', 'error');
+                    loadData();
+                } catch (error) {
+                    console.error('Error:', error);
+                    showStatus('Error importing CSV: ' + error.message, 'error');
                 }
+            };
+            reader.readAsText(file);
+        }
+
+        function exportDatabase() {
+            try {
+                const data = db.export();
+                const blob = new Blob([data], { type: 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'inventory_' + new Date().toISOString().split('T')[0] + '.db';
+                link.click();
+                URL.revokeObjectURL(url);
+                showStatus('Database exported successfully ✓', 'success');
             } catch (error) {
                 console.error('Error:', error);
-                showStatus('Error importing CSV: ' + error.message, 'error');
+                showStatus('Error exporting database', 'error');
+            }
+        }
+
+        function importDatabase() {
+            const file = document.getElementById('importDbFile').files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    db = new SQL.Database(data);
+                    saveDatabase();
+                    loadData();
+                    showStatus('Database imported successfully ✓', 'success');
+                    document.getElementById('importDbFile').value = '';
+                } catch (error) {
+                    console.error('Error:', error);
+                    showStatus('Error importing database: ' + error.message, 'error');
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function exportCSV() {
+            try {
+                if (inventory.length === 0) {
+                    showStatus('No records to export', 'error');
+                    return;
+                }
+
+                const headers = ['id', 'device_name', 'device_serial_number', 'device_model', 'location', 'assigned_user', 'device_phone_number', 'carrier', 'department', 'notes', 'created_at', 'updated_at'];
+                
+                let csv = headers.join(',') + '\n';
+                
+                inventory.forEach(record => {
+                    const values = headers.map(header => {
+                        const value = record[header] || '';
+                        // Escape quotes and wrap in quotes if contains comma
+                        return (value.toString().includes(',') || value.toString().includes('"')) 
+                            ? '"' + value.toString().replace(/"/g, '""') + '"' 
+                            : value;
+                    });
+                    csv += values.join(',') + '\n';
+                });
+
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = 'inventory_' + new Date().toISOString().split('T')[0] + '.csv';
+                link.click();
+                URL.revokeObjectURL(url);
+                showStatus('CSV exported successfully ✓', 'success');
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus('Error exporting CSV', 'error');
             }
         }
 
@@ -571,6 +774,9 @@
             div.textContent = text;
             return div.innerHTML;
         }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', initDB);
     </script>
 </body>
 </html>
